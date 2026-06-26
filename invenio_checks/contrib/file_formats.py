@@ -95,6 +95,7 @@ class FileFormatsCheck(Check):
     )
     sort_order = 20
     sync = True
+    target_type = "record"
 
     _known_formats_cfg = "CHECKS_FILE_FORMATS_KNOWN_FORMATS_PATH"
 

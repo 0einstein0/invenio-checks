@@ -19,8 +19,8 @@ class ChecksAPI:
 
     @classmethod
     def get_runs(cls, record, is_draft=None):
-        """Get all check runs for a record or draft."""
-        if is_draft is None and getattr(record, "is_draft", False):
+        """Get all check runs for an object."""
+        if is_draft is None and getattr(record, "is_draft", None) is not None:
             is_draft = record.is_draft
         return CheckRun.query.filter_by(record_id=record.id, is_draft=is_draft).all()
 
@@ -52,6 +52,20 @@ class ChecksAPI:
         updates the run with the new results. If no run exists, it will create it.
         If the operation fails, an error is logged and `None` is returned.
         """
+        record_is_draft = getattr(record, "is_draft", None)
+        if config.target_type == "record" and record_is_draft is None:
+            current_app.logger.warning(
+                "Skipping record check on non-record object",
+                extra={"check_config_id": str(config.id)},
+            )
+            return None
+        if config.target_type == "community" and record_is_draft is not None:
+            current_app.logger.warning(
+                "Skipping community check on record object",
+                extra={"check_config_id": str(config.id)},
+            )
+            return None
+
         if is_draft is None and config.target_type == "record":
             is_draft = record.is_draft
 
