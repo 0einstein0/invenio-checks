@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from flask import current_app
 from invenio_db import db
-from invenio_db.uow import ModelCommitOp
+from invenio_db.uow import ModelCommitOp, Operation
 from sqlalchemy import or_
 
 from .models import CheckConfig, CheckRun, CheckRunStatus
@@ -16,13 +16,23 @@ from .proxies import current_checks_registry
 from .tasks import run_check_async
 
 
+class _CeleryTaskOp(Operation):
+    """Dispatch a Celery task after the UoW commits."""
+
+    def __init__(self, task, check_run):
+        self._task = task
+        self._check_run = check_run
+
+    def on_commit(self, uow):
+        """Dispatch the task after the DB transaction is committed."""
+        self._task.delay(check_run_id=str(self._check_run.id))
+
+
 class ChecksAPI:
     """API for managing checks."""
 
     @classmethod
     def get_runs(cls, record, is_draft=None):
-        """Get all check runs for a record or draft."""
-
         """Get all check runs for an object."""
         if is_draft is None and getattr(record, "is_draft", None) is not None:
             is_draft = record.is_draft
@@ -99,20 +109,6 @@ class ChecksAPI:
         updates the run with the new results. If no run exists, it will create it.
         If the operation fails, an error is logged and `None` is returned.
         """
-        record_is_draft = getattr(record, "is_draft", None)
-        if config.target_type == "record" and record_is_draft is None:
-            current_app.logger.warning(
-                "Skipping record check on non-record object",
-                extra={"check_config_id": str(config.id)},
-            )
-            return None
-        if config.target_type == "community" and record_is_draft is not None:
-            current_app.logger.warning(
-                "Skipping community check on record object",
-                extra={"check_config_id": str(config.id)},
-            )
-            return None
-
         if is_draft is None and config.target_type == "record":
             is_draft = record.is_draft
 
@@ -156,11 +152,8 @@ class ChecksAPI:
                 )
 
                 uow.register(ModelCommitOp(result_run))
-                db.session.commit()
-
-                run_check_async.delay(
-                    check_run_id=str(result_run.id),
-                )
+                # Ensures that the task is dispatched after record is commited
+                uow.register(_CeleryTaskOp(run_check_async, result_run))
         except Exception as e:
             current_app.logger.exception(
                 "Error running check on record",
